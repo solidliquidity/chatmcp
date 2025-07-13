@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "firecrawl": {
+      "command": "firecrawl-mcp",
+      "env": {
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}",
+        "FIRECRAWL_RETRY_ATTEMPTS": "${FIRECRAWL_RETRY_ATTEMPTS}",
+        "FIRECRAWL_RETRY_DELAY": "${FIRECRAWL_RETRY_DELAY}"
+      }
+    }
+  }
+}
