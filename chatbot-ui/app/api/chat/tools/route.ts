@@ -5,6 +5,7 @@ import { ChatSettings } from "@/types"
 import { OpenAIStream, StreamingTextResponse } from "ai"
 import OpenAI from "openai"
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions.mjs"
+import { getMCPTools, executeMCPTool } from "@/lib/mcp/mcp-integration"
 
 export async function POST(request: Request) {
   const json = await request.json()
@@ -27,6 +28,10 @@ export async function POST(request: Request) {
     let allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = []
     let allRouteMaps = {}
     let schemaDetails = []
+
+    // Add MCP tools
+    const mcpTools = await getMCPTools()
+    allTools = allTools.concat(mcpTools)
 
     for (const selectedTool of selectedTools) {
       try {
@@ -83,6 +88,33 @@ export async function POST(request: Request) {
         const functionName = functionCall.name
         const argumentsString = toolCall.function.arguments.trim()
         const parsedArgs = JSON.parse(argumentsString)
+
+        // Check if this is an MCP tool (starts with firecrawl_)
+        if (functionName.startsWith('firecrawl_')) {
+          try {
+            const mcpResult = await executeMCPTool(functionName, parsedArgs)
+            
+            messages.push({
+              tool_call_id: toolCall.id,
+              role: "tool",
+              name: functionName,
+              content: JSON.stringify(mcpResult)
+            })
+            
+            continue
+          } catch (error) {
+            console.error('MCP tool execution failed:', error)
+            
+            messages.push({
+              tool_call_id: toolCall.id,
+              role: "tool", 
+              name: functionName,
+              content: JSON.stringify({ error: error.message })
+            })
+            
+            continue
+          }
+        }
 
         // Find the schema detail that contains the function name
         const schemaDetail = schemaDetails.find(detail =>
