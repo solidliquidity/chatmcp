@@ -12,6 +12,7 @@ export class FirecrawlMCPClient {
     return new Promise((resolve, reject) => {
       this.process = spawn('npx', ['firecrawl-mcp'], {
         stdio: 'pipe',
+        cwd: process.cwd() + '/../firecrawl-mcp',
         env: {
           ...process.env,
           FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || ''
