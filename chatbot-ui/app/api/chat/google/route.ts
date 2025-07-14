@@ -3,7 +3,7 @@ import { ChatSettings } from "@/types"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 import { getMCPTools, executeMCPTool } from "@/lib/mcp/mcp-integration"
 
-export const runtime = "edge"
+// export const runtime = "edge"
 
 export async function POST(request: Request) {
   const json = await request.json()
