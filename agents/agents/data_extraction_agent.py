@@ -10,18 +10,22 @@ from datetime import datetime
 import uuid
 import asyncio
 
-from ..shared.config import GOOGLE_ADK_CONFIG, DATABASE_CONFIG, AGENT_CONFIG
-from ..shared.types import (
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.config import GOOGLE_ADK_CONFIG, DATABASE_CONFIG, AGENT_CONFIG
+from shared.types import (
     CompanyData, ExcelProcessingResult, AgentResponse, 
     CompanyStatus, AlertSeverity
 )
-from ..shared.utils import (
+from shared.utils import (
     setup_logging, create_success_response, create_error_response,
     validate_company_data, parse_excel_data, calculate_company_health_score,
     get_current_timestamp
 )
-from ..tools.database import DatabaseManager
-from ..tools.file_operations import FileProcessor
+from tools.database import DatabaseManager
+from tools.file_operations import FileProcessor
 
 class DataExtractionAgent:
     """Agent for extracting data from Excel sheets and populating database"""

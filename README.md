@@ -99,6 +99,47 @@ A modern, full-stack chatbot interface built with cutting-edge technologies for 
 - **LangChain**: AI application framework
 - **Model Context Protocol (MCP)**: Tool integration framework
 
+## 🧠 Agent Architecture
+
+### **MCP Server Integration**
+The system includes a sophisticated multi-agent architecture that integrates with the chat UI through the Model Context Protocol (MCP). All AI providers can access these tools through standardized function calling.
+
+#### **Architecture Overview**
+- **MCP Server** (`agents/mcp_server.py`) exposes 9 tools that route to 3 specialized agents:
+  - **DataExtractionAgent**: Excel processing, company health analysis
+  - **FollowUpAgent**: Automated follow-ups, condition checking  
+  - **NotificationAgent**: Health monitoring, alert dashboards
+
+#### **Request Flow**
+1. **Chat UI** → **MultiMCPClient** (`chatbot-ui/lib/mcp/multi-mcp-client.ts`)
+2. **MCP Client** discovers tools with prefixed names like `columbia-lake-agents_process_excel_file`
+3. **Any AI Provider** (OpenAI, Anthropic, Google, etc.) calls tools through standardized function calling
+4. **MCP Server** routes tool calls to appropriate agent methods
+5. **Agents** execute business logic using Google ADK and PostgreSQL
+6. **Responses** return structured data through the MCP protocol
+
+#### **Multi-Provider Support**
+- **OpenAI Function Format**: Tools converted to OpenAI function format for universal compatibility
+- **Provider-Specific Integration**: Direct integration for Google Gemini, general tools API for others
+- **Standardized Responses**: All providers receive consistent tool responses
+
+#### **Key Patterns**
+- **Tool Registration**: Each tool maps to specific agent methods with JSON schemas
+- **Agent Methods**: Use Google ADK for AI processing, PostgreSQL for data storage
+- **Response Format**: Standardized `AgentResponse` with success/message/data/errors
+- **Error Handling**: Comprehensive logging and graceful error responses
+
+#### **Available Tools**
+- `test_connection` - Tests system connectivity
+- `process_excel_file` - Processes Excel files via DataExtractionAgent
+- `analyze_company_health` - Analyzes company health via DataExtractionAgent
+- `run_follow_up_process` - Runs automated follow-ups via FollowUpAgent
+- `check_follow_up_conditions` - Checks follow-up needs via FollowUpAgent
+- `get_follow_up_stats` - Gets follow-up statistics via FollowUpAgent
+- `monitor_company_health` - Monitors health via NotificationAgent
+- `run_monitoring_cycle` - Runs monitoring cycle via NotificationAgent
+- `get_alert_dashboard` - Gets alert dashboard via NotificationAgent
+
 ### **File Processing**
 - **PDF Parse**: PDF document processing
 - **Mammoth**: DOCX document processing

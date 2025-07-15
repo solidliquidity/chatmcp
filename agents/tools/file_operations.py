@@ -9,7 +9,11 @@ from typing import Dict, List, Optional, Any
 import json
 from datetime import datetime
 
-from ..shared.utils import setup_logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.utils import setup_logging
 
 class FileProcessor:
     """Handles file operations for agents"""

@@ -216,10 +216,10 @@ export class MultiMCPClient {
         }
       };
 
-      // Load Columbia Lake agents configuration
+      // Load Columbia Lake agents configuration  
       const agentsConfig: MCPServerConfig = {
-        command: 'python',
-        args: ['-m', 'mcp_server'],
+        command: '/Users/solidliquidity/.pyenv/versions/3.11.6/bin/python3',
+        args: ['mcp_server.py'],
         cwd: path.join(process.cwd(), '..', 'agents'),
         env: {
           GOOGLE_API_KEY: process.env.GOOGLE_API_KEY || '',

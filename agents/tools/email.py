@@ -12,8 +12,12 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import re
 
-from ..shared.config import EmailConfig
-from ..shared.utils import setup_logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.config import EmailConfig
+from shared.utils import setup_logging
 
 class EmailManager:
     """Manages email operations for all agents"""

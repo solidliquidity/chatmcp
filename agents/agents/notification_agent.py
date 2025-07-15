@@ -10,18 +10,22 @@ import uuid
 import asyncio
 import json
 
-from ..shared.config import GOOGLE_ADK_CONFIG, DATABASE_CONFIG, EMAIL_CONFIG, AGENT_CONFIG
-from ..shared.types import (
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.config import GOOGLE_ADK_CONFIG, DATABASE_CONFIG, EMAIL_CONFIG, AGENT_CONFIG
+from shared.types import (
     CompanyData, NotificationAlert, AgentResponse, 
     CompanyStatus, AlertSeverity
 )
-from ..shared.utils import (
+from shared.utils import (
     setup_logging, create_success_response, create_error_response,
     calculate_company_health_score, determine_alert_severity,
     get_current_timestamp
 )
-from ..tools.database import DatabaseManager
-from ..tools.email import EmailManager
+from tools.database import DatabaseManager
+from tools.email import EmailManager
 
 class NotificationAgent:
     """Agent for monitoring company health and sending failure alerts"""

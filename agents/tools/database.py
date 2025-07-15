@@ -8,9 +8,13 @@ import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 
-from ..shared.config import DatabaseConfig
-from ..shared.types import CompanyData, FollowUpAction, NotificationAlert, CompanyStatus, AlertSeverity
-from ..shared.utils import setup_logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.config import DatabaseConfig
+from shared.types import CompanyData, FollowUpAction, NotificationAlert, CompanyStatus, AlertSeverity
+from shared.utils import setup_logging
 
 class DatabaseManager:
     """Manages database operations for all agents"""
