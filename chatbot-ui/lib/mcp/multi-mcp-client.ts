@@ -426,20 +426,21 @@ export class MultiMCPClient {
       console.log(`[DEBUG] Actual tool name: ${actualToolName}`);
       
       // Special handling for excel-mcp tools - use fallback for now
-      if (serverName === 'excel-mcp') {
-        console.log(`[DEBUG] Using fallback implementation for excel-mcp tool: ${actualToolName}`);
-        if (actualToolName === 'search_excel_files') {
-          return await this.executeExcelSearchFallback(args);
-        } else if (actualToolName === 'get_common_excel_locations') {
-          return await this.executeExcelLocationsFallback();
-        } else if (actualToolName === 'read_data_from_excel') {
-          return await this.executeExcelReadFallback(args);
-        } else if (actualToolName === 'get_workbook_metadata') {
-          return await this.executeExcelMetadataFallback(args);
-        } else {
-          throw new Error(`Excel MCP tool ${actualToolName} not implemented in fallback`);
-        }
-      }
+      // DISABLED: Using actual MCP server instead of fallback
+      // if (serverName === 'excel-mcp') {
+      //   console.log(`[DEBUG] Using fallback implementation for excel-mcp tool: ${actualToolName}`);
+      //   if (actualToolName === 'search_excel_files') {
+      //     return await this.executeExcelSearchFallback(args);
+      //   } else if (actualToolName === 'get_common_excel_locations') {
+      //     return await this.executeExcelLocationsFallback();
+      //   } else if (actualToolName === 'read_data_from_excel') {
+      //     return await this.executeExcelReadFallback(args);
+      //   } else if (actualToolName === 'get_workbook_metadata') {
+      //     return await this.executeExcelMetadataFallback(args);
+      //   } else {
+      //     throw new Error(`Excel MCP tool ${actualToolName} not implemented in fallback`);
+      //   }
+      // }
       
       return await client.callTool(actualToolName, args);
     } catch (error) {

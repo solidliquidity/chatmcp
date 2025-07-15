@@ -42,19 +42,21 @@ def streamable_http():
 @app.command()
 def stdio():
     """Start Excel MCP Server in stdio mode"""
-    print("Excel MCP Server - Stdio mode")
-    print("-----------------------------")
-    print("Press Ctrl+C to exit")
+    # Don't print to stdout in stdio mode - it's reserved for JSON-RPC
     try:
         run_stdio()
     except KeyboardInterrupt:
-        print("\nShutting down server...")
+        # Log to stderr instead of stdout
+        import sys
+        print("Shutting down server...", file=sys.stderr)
     except Exception as e:
-        print(f"\nError: {e}")
+        import sys
+        print(f"Error: {e}", file=sys.stderr)
         import traceback
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stderr)
     finally:
-        print("Service stopped.")
+        # Don't print anything in finally block for stdio mode
+        pass
 
 if __name__ == "__main__":
     app() 
