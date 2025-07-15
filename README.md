@@ -106,17 +106,22 @@ The system includes a sophisticated multi-agent architecture that integrates wit
 
 #### **Architecture Overview**
 - **MCP Server** (`agents/mcp_server.py`) exposes 9 tools that route to 3 specialized agents:
-  - **DataExtractionAgent**: Excel processing, company health analysis
+  - **DataExtractionAgent**: Excel processing via excel-mcp-server, company health analysis
   - **FollowUpAgent**: Automated follow-ups, condition checking  
   - **NotificationAgent**: Health monitoring, alert dashboards
+- **Excel MCP Server** (`excel-mcp-server/`) provides 20+ Excel manipulation tools:
+  - **File Operations**: Create/read workbooks, worksheets, metadata
+  - **Data Processing**: Read/write cell data, format ranges, validate data
+  - **Advanced Features**: Charts, pivot tables, formulas, data validation
 
 #### **Request Flow**
 1. **Chat UI** → **MultiMCPClient** (`chatbot-ui/lib/mcp/multi-mcp-client.ts`)
-2. **MCP Client** discovers tools with prefixed names like `columbia-lake-agents_process_excel_file`
+2. **MCP Client** discovers tools with prefixed names like `columbia-lake-agents_process_excel_file` and `excel-mcp_read_data_from_excel`
 3. **Any AI Provider** (OpenAI, Anthropic, Google, etc.) calls tools through standardized function calling
 4. **MCP Server** routes tool calls to appropriate agent methods
-5. **Agents** execute business logic using Google ADK and PostgreSQL
-6. **Responses** return structured data through the MCP protocol
+5. **Agents** execute business logic using Google ADK, PostgreSQL, and Excel MCP tools
+6. **Excel MCP Server** handles Excel file operations (read/write/format/analyze)
+7. **Responses** return structured data through the MCP protocol
 
 #### **Multi-Provider Support**
 - **OpenAI Function Format**: Tools converted to OpenAI function format for universal compatibility
@@ -130,6 +135,8 @@ The system includes a sophisticated multi-agent architecture that integrates wit
 - **Error Handling**: Comprehensive logging and graceful error responses
 
 #### **Available Tools**
+
+**Columbia Lake Agents:**
 - `test_connection` - Tests system connectivity
 - `process_excel_file` - Processes Excel files via DataExtractionAgent
 - `analyze_company_health` - Analyzes company health via DataExtractionAgent
@@ -139,6 +146,19 @@ The system includes a sophisticated multi-agent architecture that integrates wit
 - `monitor_company_health` - Monitors health via NotificationAgent
 - `run_monitoring_cycle` - Runs monitoring cycle via NotificationAgent
 - `get_alert_dashboard` - Gets alert dashboard via NotificationAgent
+
+**Excel MCP Server:**
+- `read_data_from_excel` - Read data from Excel with metadata
+- `write_data_to_excel` - Write data to Excel worksheets
+- `create_workbook` - Create new Excel workbooks
+- `create_worksheet` - Create new worksheets
+- `get_workbook_metadata` - Get workbook information
+- `format_range` - Apply formatting to cell ranges
+- `apply_formula` - Apply Excel formulas to cells
+- `create_chart` - Create charts and visualizations
+- `create_pivot_table` - Create pivot tables
+- `validate_excel_range` - Validate Excel ranges
+- And 10+ more Excel manipulation tools
 
 ### **File Processing**
 - **PDF Parse**: PDF document processing

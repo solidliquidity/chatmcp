@@ -32,10 +32,264 @@ class ColumbiaLakeMCPServer:
         self.followup_agent = FollowUpAgent()
         self.notification_agent = NotificationAgent()
         
+        # Configure MCP tools for agents that need them
+        self._configure_mcp_tools()
+        
         # Tool registry
         self.tools = self._register_tools()
         
         self.logger.info("Columbia Lake MCP Server initialized")
+    
+    def _configure_mcp_tools(self):
+        """Configure MCP tools for agents that need them"""
+        try:
+            # Create a real MCP client connection to excel-mcp-server
+            class ExcelMCPClient:
+                def __init__(self, logger):
+                    self.logger = logger
+                    self.process = None
+                    self.is_connected = False
+                    self.request_id = 1
+                    self.pending_requests = {}
+                    
+                async def connect(self):
+                    """Connect to the excel-mcp-server"""
+                    if self.is_connected:
+                        return
+                    
+                    try:
+                        import subprocess
+                        import asyncio
+                        
+                        # Get the excel-mcp-server path
+                        excel_server_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'excel-mcp-server')
+                        
+                        # Start the excel-mcp-server process
+                        self.process = subprocess.Popen([
+                            '/Users/solidliquidity/.pyenv/versions/3.11.6/bin/python3',
+                            '-m', 'excel_mcp', 'stdio'
+                        ], 
+                        stdin=subprocess.PIPE, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        cwd=excel_server_path,
+                        text=True,
+                        bufsize=0
+                        )
+                        
+                        # Initialize the MCP connection
+                        init_request = {
+                            "jsonrpc": "2.0",
+                            "id": self.request_id,
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {
+                                    "tools": {}
+                                },
+                                "clientInfo": {
+                                    "name": "columbia-lake-agents",
+                                    "version": "1.0.0"
+                                }
+                            }
+                        }
+                        
+                        self.request_id += 1
+                        self.process.stdin.write(json.dumps(init_request) + '\n')
+                        self.process.stdin.flush()
+                        
+                        # Read initialization response
+                        response = self.process.stdout.readline()
+                        if response:
+                            response_data = json.loads(response.strip())
+                            if 'result' in response_data:
+                                self.is_connected = True
+                                self.logger.info("Successfully connected to excel-mcp-server")
+                            else:
+                                self.logger.error(f"Failed to initialize excel-mcp-server: {response_data}")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Failed to connect to excel-mcp-server: {str(e)}")
+                        self.is_connected = False
+                
+                async def call_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
+                    """Call an MCP tool on the excel-mcp-server"""
+                    if not self.is_connected:
+                        await self.connect()
+                    
+                    if not self.is_connected:
+                        # Fallback to basic implementations for critical tools
+                        if tool_name == "search_excel_files":
+                            return await self._fallback_search_excel_files(args)
+                        elif tool_name == "get_common_excel_locations":
+                            return await self._fallback_get_common_locations()
+                        else:
+                            raise Exception("Excel MCP server not connected")
+                    
+                    try:
+                        # Send tool call request
+                        request = {
+                            "jsonrpc": "2.0",
+                            "id": self.request_id,
+                            "method": "tools/call",
+                            "params": {
+                                "name": tool_name,
+                                "arguments": args
+                            }
+                        }
+                        
+                        self.request_id += 1
+                        self.process.stdin.write(json.dumps(request) + '\n')
+                        self.process.stdin.flush()
+                        
+                        # Read response
+                        response = self.process.stdout.readline()
+                        if response:
+                            response_data = json.loads(response.strip())
+                            if 'result' in response_data:
+                                return response_data['result']
+                            elif 'error' in response_data:
+                                raise Exception(f"Excel MCP tool error: {response_data['error']}")
+                        
+                        raise Exception("No response from excel-mcp-server")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error calling Excel MCP tool {tool_name}: {str(e)}")
+                        # Fallback for critical tools
+                        if tool_name == "search_excel_files":
+                            return await self._fallback_search_excel_files(args)
+                        elif tool_name == "get_common_excel_locations":
+                            return await self._fallback_get_common_locations()
+                        else:
+                            raise e
+                
+                async def _fallback_search_excel_files(self, args: Dict[str, Any]) -> Dict[str, Any]:
+                    """Fallback implementation for search_excel_files"""
+                    import os
+                    import glob
+                    from datetime import datetime
+                    
+                    search_path = args.get("search_path", "~")
+                    filename_pattern = args.get("filename_pattern", "*.xlsx")
+                    include_subdirs = args.get("include_subdirs", True)
+                    
+                    search_path = os.path.expanduser(search_path)
+                    search_path = os.path.abspath(search_path)
+                    
+                    if include_subdirs:
+                        pattern = os.path.join(search_path, '**', filename_pattern)
+                    else:
+                        pattern = os.path.join(search_path, filename_pattern)
+                    
+                    found_files = []
+                    try:
+                        for filepath in glob.glob(pattern, recursive=include_subdirs):
+                            if len(found_files) >= 50:
+                                break
+                            try:
+                                stat = os.stat(filepath)
+                                file_info = {
+                                    "filepath": filepath,
+                                    "filename": os.path.basename(filepath),
+                                    "directory": os.path.dirname(filepath),
+                                    "size_bytes": stat.st_size,
+                                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                                    "modified": stat.st_mtime,
+                                    "modified_readable": datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                found_files.append(file_info)
+                            except Exception:
+                                continue
+                        
+                        found_files.sort(key=lambda x: x['modified'], reverse=True)
+                        
+                        return {
+                            "search_path": search_path,
+                            "pattern": filename_pattern,
+                            "include_subdirs": include_subdirs,
+                            "total_found": len(found_files),
+                            "files": found_files
+                        }
+                    except Exception as e:
+                        return {"error": str(e)}
+                
+                async def _fallback_get_common_locations(self) -> Dict[str, Any]:
+                    """Fallback implementation for get_common_excel_locations"""
+                    import platform
+                    import os
+                    
+                    home_dir = os.path.expanduser("~")
+                    common_locations = []
+                    
+                    if platform.system() == "Darwin":  # macOS
+                        locations = [
+                            os.path.join(home_dir, "Desktop"),
+                            os.path.join(home_dir, "Documents"),
+                            os.path.join(home_dir, "Downloads"),
+                            os.path.join(home_dir, "Library", "CloudStorage")
+                        ]
+                    elif platform.system() == "Windows":
+                        locations = [
+                            os.path.join(home_dir, "Desktop"),
+                            os.path.join(home_dir, "Documents"),
+                            os.path.join(home_dir, "Downloads"),
+                            os.path.join(home_dir, "OneDrive")
+                        ]
+                    else:  # Linux
+                        locations = [
+                            os.path.join(home_dir, "Desktop"),
+                            os.path.join(home_dir, "Documents"),
+                            os.path.join(home_dir, "Downloads")
+                        ]
+                    
+                    for location in locations:
+                        if os.path.exists(location):
+                            try:
+                                xlsx_count = len([f for f in os.listdir(location) if f.endswith(('.xlsx', '.xls', '.xlsm'))])
+                                common_locations.append({
+                                    "path": location,
+                                    "exists": True,
+                                    "excel_files_count": xlsx_count
+                                })
+                            except PermissionError:
+                                common_locations.append({
+                                    "path": location,
+                                    "exists": True,
+                                    "excel_files_count": "Permission denied"
+                                })
+                        else:
+                            common_locations.append({
+                                "path": location,
+                                "exists": False,
+                                "excel_files_count": 0
+                            })
+                    
+                    return {
+                        "os": platform.system(),
+                        "home_directory": home_dir,
+                        "common_locations": common_locations
+                    }
+                
+                def disconnect(self):
+                    """Disconnect from the excel-mcp-server"""
+                    if self.process:
+                        self.process.terminate()
+                        self.process = None
+                        self.is_connected = False
+                        self.logger.info("Disconnected from excel-mcp-server")
+            
+            # Create and connect to excel-mcp-server
+            excel_client = ExcelMCPClient(self.logger)
+            asyncio.create_task(excel_client.connect())
+            
+            # Set MCP tools interface for DataExtractionAgent
+            self.data_agent.set_mcp_tools(excel_client)
+            
+            self.logger.info("Real Excel MCP client configured for DataExtractionAgent")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to configure MCP tools: {str(e)}")
+            # Continue without MCP tools - agents will fall back to direct methods
     
     def _register_tools(self) -> Dict[str, Dict[str, Any]]:
         """Register all available tools from agents"""
@@ -82,6 +336,33 @@ class ColumbiaLakeMCPServer:
                 },
                 "agent": "data_extraction",
                 "method": "analyze_company_health"
+            },
+            "search_excel_files": {
+                "name": "search_excel_files",
+                "description": "Search for Excel files on the filesystem",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "search_path": {
+                            "type": "string",
+                            "description": "Directory to search in (default: ~)",
+                            "default": "~"
+                        },
+                        "filename_pattern": {
+                            "type": "string",
+                            "description": "Pattern to match (default: *.xlsx)",
+                            "default": "*.xlsx"
+                        },
+                        "include_subdirs": {
+                            "type": "boolean",
+                            "description": "Whether to search subdirectories recursively",
+                            "default": True
+                        }
+                    },
+                    "required": []
+                },
+                "agent": "data_extraction",
+                "method": "search_excel_files"
             },
             "run_follow_up_process": {
                 "name": "run_follow_up_process",

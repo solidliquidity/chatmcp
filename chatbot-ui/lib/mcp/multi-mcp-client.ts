@@ -45,15 +45,37 @@ export class MCPClient {
       // Handle stderr for initialization messages
       this.process.stderr?.on('data', (data) => {
         const output = data.toString();
-        console.log(`MCP Server (${this.serverName}):`, output);
+        console.log(`MCP Server (${this.serverName}) stderr:`, output);
         
-        if (output.includes('initialized') && !initialized) {
+        // Check for various initialization indicators
+        if ((output.includes('initialized') || 
+             output.includes('Excel MCP Server') || 
+             output.includes('Stdio mode')) && !initialized) {
           initialized = true;
           this.setupMessageHandling();
           this.isConnected = true;
           resolve();
         }
       });
+
+      // Handle stdout for initialization messages (some servers output here)
+      this.process.stdout?.on('data', (data) => {
+        const output = data.toString();
+        console.log(`MCP Server (${this.serverName}) stdout:`, output);
+        
+        // Check for various initialization indicators
+        if ((output.includes('initialized') || 
+             output.includes('Excel MCP Server') || 
+             output.includes('Stdio mode')) && !initialized) {
+          initialized = true;
+          this.setupMessageHandling();
+          this.isConnected = true;
+          resolve();
+        }
+      });
+
+      // Setup message handling immediately for stdio transport
+      this.setupMessageHandling();
 
       // Handle process errors
       this.process.on('error', (error) => {
@@ -76,23 +98,41 @@ export class MCPClient {
             method: 'initialize',
             params: {
               protocolVersion: '2024-11-05',
-              capabilities: {},
+              capabilities: {
+                tools: {}
+              },
               clientInfo: {
                 name: 'chatbot-ui',
                 version: '1.0.0'
               }
             }
           };
+          console.log(`Sending initialization request to ${this.serverName}:`, initRequest);
           this.process.stdin.write(JSON.stringify(initRequest) + '\n');
+          
+          // For stdio transport, assume initialization is successful after sending request
+          if (this.serverName === 'excel-mcp') {
+            setTimeout(() => {
+              if (!initialized) {
+                console.log(`MCP Server ${this.serverName} initialized (stdio transport)`);
+                initialized = true;
+                this.isConnected = true;
+                resolve();
+              }
+            }, 1000);
+          }
         }
       }, 1000);
 
       // Timeout if server doesn't start
       setTimeout(() => {
         if (!initialized) {
+          console.error(`MCP server ${this.serverName} failed to initialize within timeout`);
+          console.error(`Process stdout: ${this.process?.stdout ? 'available' : 'not available'}`);
+          console.error(`Process stderr: ${this.process?.stderr ? 'available' : 'not available'}`);
           reject(new Error(`MCP server ${this.serverName} failed to initialize within timeout`));
         }
-      }, 15000);
+      }, 30000); // Increased timeout to 30 seconds
     });
   }
 
@@ -123,6 +163,8 @@ export class MCPClient {
   }
 
   private handleMessage(message: any): void {
+    console.log(`MCP Server (${this.serverName}) received message:`, message);
+    
     if (message.id && this.pendingRequests.has(message.id)) {
       const { resolve, reject } = this.pendingRequests.get(message.id)!;
       this.pendingRequests.delete(message.id);
@@ -132,6 +174,12 @@ export class MCPClient {
       } else {
         resolve(message.result);
       }
+    }
+    
+    // Handle initialization response
+    if (message.method === 'initialize' || (message.result && message.result.serverInfo)) {
+      console.log(`MCP Server (${this.serverName}) initialized successfully`);
+      this.isConnected = true;
     }
   }
 
@@ -173,8 +221,31 @@ export class MCPClient {
   }
 
   async listTools(): Promise<any[]> {
-    const response = await this.sendRequest('tools/list');
-    return response.tools || [];
+    console.log(`Requesting tools from ${this.serverName}...`);
+    try {
+      // Try without parameters first
+      let response;
+      try {
+        response = await this.sendRequest('tools/list');
+      } catch (error) {
+        // If that fails, try with empty parameters
+        console.log(`Retrying tools/list with parameters for ${this.serverName}...`);
+        response = await this.sendRequest('tools/list', {});
+      }
+      console.log(`Tools response from ${this.serverName}:`, response);
+      return response.tools || [];
+    } catch (error) {
+      console.error(`Error getting tools from ${this.serverName}:`, error);
+      
+      // For Excel MCP server, if tools/list fails, return empty array
+      // This allows the server to connect but without tool discovery
+      if (this.serverName === 'excel-mcp') {
+        console.log(`Excel MCP server doesn't support tools/list, continuing without tool discovery`);
+        return [];
+      }
+      
+      return [];
+    }
   }
 
   async callTool(name: string, args: any): Promise<any> {
@@ -235,9 +306,20 @@ export class MultiMCPClient {
         }
       };
 
+      // Load Excel MCP server configuration
+      const excelConfig: MCPServerConfig = {
+        command: '/Users/solidliquidity/.pyenv/versions/3.11.6/bin/python3',
+        args: ['-m', 'excel_mcp', 'stdio'],
+        cwd: path.join(process.cwd(), '..'),
+        env: {
+          EXCEL_FILES_PATH: process.env.EXCEL_FILES_PATH || path.join(process.cwd(), '..', 'excel-files')
+        }
+      };
+
       // Register clients
       this.clients.set('firecrawl', new MCPClient('firecrawl', firecrawlConfig));
       this.clients.set('columbia-lake-agents', new MCPClient('columbia-lake-agents', agentsConfig));
+      this.clients.set('excel-mcp', new MCPClient('excel-mcp', excelConfig));
 
     } catch (error) {
       console.error('Failed to load MCP configuration:', error);
@@ -282,22 +364,38 @@ export class MultiMCPClient {
     const allTools: any[] = [];
     
     for (const [serverName, client] of this.clients.entries()) {
-      try {
-        if (client.getConnectionStatus()) {
-          const tools = await client.listTools();
+      if (client.getConnectionStatus()) {
+        let tools: any[] = [];
+        
+        try {
+          tools = await client.listTools();
+          console.log(`Raw tools from ${serverName}:`, tools.length, tools);
           
-          // Add server prefix to tool names to avoid conflicts
-          const prefixedTools = tools.map(tool => ({
-            ...tool,
-            name: `${serverName}_${tool.name}`,
-            serverName
-          }));
-          
-          this.toolsCache.set(serverName, prefixedTools);
-          allTools.push(...prefixedTools);
+          // For Excel MCP server, always use manual discovery since it may not support tools/list properly
+          if (serverName === 'excel-mcp') {
+            console.log(`Using manually discovered tools for ${serverName} (override)`);
+            tools = this.getExcelMCPServerTools();
+          }
+        } catch (error) {
+          // For Excel MCP server, use manually discovered tools
+          if (serverName === 'excel-mcp') {
+            console.log(`Using manually discovered tools for ${serverName} (fallback)`);
+            tools = this.getExcelMCPServerTools();
+          } else {
+            console.error(`Failed to get tools from ${serverName}:`, error);
+            continue; // Skip this server and continue with others
+          }
         }
-      } catch (error) {
-        console.error(`Failed to get tools from ${serverName}:`, error);
+        
+        // Add server prefix to tool names to avoid conflicts
+        const prefixedTools = tools.map(tool => ({
+          ...tool,
+          name: `${serverName}_${tool.name}`,
+          serverName
+        }));
+        
+        this.toolsCache.set(serverName, prefixedTools);
+        allTools.push(...prefixedTools);
       }
     }
 
@@ -344,8 +442,348 @@ export class MultiMCPClient {
       return await client.listTools();
     } catch (error) {
       console.error(`Failed to get tools from ${serverName}:`, error);
+      
+      // For Excel MCP server, return manually discovered tools
+      if (serverName === 'excel-mcp') {
+        return this.getExcelMCPServerTools();
+      }
+      
       return [];
     }
+  }
+
+  private getExcelMCPServerTools(): any[] {
+    // Manually discovered tools from the Excel MCP server code
+    const excelTools = [
+      {
+        name: 'apply_formula',
+        description: 'Apply Excel formula to cell with verification',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            cell: { type: 'string', description: 'Cell reference' },
+            formula: { type: 'string', description: 'Excel formula to apply' }
+          },
+          required: ['filepath', 'sheet_name', 'cell', 'formula']
+        }
+      },
+      {
+        name: 'validate_formula_syntax',
+        description: 'Validate Excel formula syntax without applying it',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            cell: { type: 'string', description: 'Cell reference' },
+            formula: { type: 'string', description: 'Excel formula to validate' }
+          },
+          required: ['filepath', 'sheet_name', 'cell', 'formula']
+        }
+      },
+      {
+        name: 'read_data_from_excel',
+        description: 'Read data from Excel worksheet with cell metadata including validation rules',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell (default A1)' },
+            end_cell: { type: 'string', description: 'Ending cell (optional)' },
+            preview_only: { type: 'boolean', description: 'Whether to return preview only' }
+          },
+          required: ['filepath', 'sheet_name']
+        }
+      },
+      {
+        name: 'write_data_to_excel',
+        description: 'Write data to Excel worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            data: { type: 'array', description: 'List of lists containing data to write' },
+            start_cell: { type: 'string', description: 'Cell to start writing to (default A1)' }
+          },
+          required: ['filepath', 'sheet_name', 'data']
+        }
+      },
+      {
+        name: 'create_workbook',
+        description: 'Create new Excel workbook',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path where to create workbook' }
+          },
+          required: ['filepath']
+        }
+      },
+      {
+        name: 'create_worksheet',
+        description: 'Create new worksheet in workbook',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name for the new worksheet' }
+          },
+          required: ['filepath', 'sheet_name']
+        }
+      },
+      {
+        name: 'create_chart',
+        description: 'Create charts and graphs in Excel',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            data_range: { type: 'string', description: 'Data range for chart' },
+            chart_type: { type: 'string', description: 'Type of chart' },
+            target_cell: { type: 'string', description: 'Target cell for chart' },
+            title: { type: 'string', description: 'Chart title' },
+            x_axis: { type: 'string', description: 'X-axis label' },
+            y_axis: { type: 'string', description: 'Y-axis label' }
+          },
+          required: ['filepath', 'sheet_name', 'data_range', 'chart_type', 'target_cell']
+        }
+      },
+      {
+        name: 'create_pivot_table',
+        description: 'Create pivot table in Excel worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            data_range: { type: 'string', description: 'Data range for pivot table' },
+            rows: { type: 'array', description: 'Row fields' },
+            values: { type: 'array', description: 'Value fields' },
+            columns: { type: 'array', description: 'Column fields (optional)' },
+            agg_func: { type: 'string', description: 'Aggregation function (default mean)' }
+          },
+          required: ['filepath', 'sheet_name', 'data_range', 'rows', 'values']
+        }
+      },
+      {
+        name: 'create_table',
+        description: 'Create Excel table',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            data_range: { type: 'string', description: 'Data range for table' },
+            table_name: { type: 'string', description: 'Name for the table (optional)' },
+            table_style: { type: 'string', description: 'Table style (default TableStyleMedium9)' }
+          },
+          required: ['filepath', 'sheet_name', 'data_range']
+        }
+      },
+      {
+        name: 'copy_worksheet',
+        description: 'Copy worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            source_sheet: { type: 'string', description: 'Source worksheet name' },
+            target_sheet: { type: 'string', description: 'Target worksheet name' }
+          },
+          required: ['filepath', 'source_sheet', 'target_sheet']
+        }
+      },
+      {
+        name: 'delete_worksheet',
+        description: 'Delete worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet to delete' }
+          },
+          required: ['filepath', 'sheet_name']
+        }
+      },
+      {
+        name: 'rename_worksheet',
+        description: 'Rename worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            old_name: { type: 'string', description: 'Current worksheet name' },
+            new_name: { type: 'string', description: 'New worksheet name' }
+          },
+          required: ['filepath', 'old_name', 'new_name']
+        }
+      },
+      {
+        name: 'get_workbook_metadata',
+        description: 'Get metadata about workbook including sheets and ranges',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            include_ranges: { type: 'boolean', description: 'Whether to include range information' }
+          },
+          required: ['filepath']
+        }
+      },
+      {
+        name: 'merge_cells',
+        description: 'Merge a range of cells',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell of range' },
+            end_cell: { type: 'string', description: 'Ending cell of range' }
+          },
+          required: ['filepath', 'sheet_name', 'start_cell', 'end_cell']
+        }
+      },
+      {
+        name: 'unmerge_cells',
+        description: 'Unmerge a previously merged range of cells',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell of range' },
+            end_cell: { type: 'string', description: 'Ending cell of range' }
+          },
+          required: ['filepath', 'sheet_name', 'start_cell', 'end_cell']
+        }
+      },
+      {
+        name: 'get_merged_cells',
+        description: 'Get merged cells in a worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' }
+          },
+          required: ['filepath', 'sheet_name']
+        }
+      },
+      {
+        name: 'copy_range',
+        description: 'Copy cell range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            source_start: { type: 'string', description: 'Source start cell' },
+            source_end: { type: 'string', description: 'Source end cell' },
+            target_start: { type: 'string', description: 'Target start cell' },
+            target_sheet: { type: 'string', description: 'Target worksheet (optional)' }
+          },
+          required: ['filepath', 'sheet_name', 'source_start', 'source_end', 'target_start']
+        }
+      },
+      {
+        name: 'delete_range',
+        description: 'Delete cell range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell' },
+            end_cell: { type: 'string', description: 'Ending cell' },
+            shift_direction: { type: 'string', description: 'Shift direction (up/down/left/right)' }
+          },
+          required: ['filepath', 'sheet_name', 'start_cell', 'end_cell']
+        }
+      },
+      {
+        name: 'validate_excel_range',
+        description: 'Validate Excel range',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell' },
+            end_cell: { type: 'string', description: 'Ending cell (optional)' }
+          },
+          required: ['filepath', 'sheet_name', 'start_cell']
+        }
+      },
+      {
+        name: 'search_excel_files',
+        description: 'Search for Excel files on the filesystem',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            search_path: { type: 'string', description: 'Directory to search in' },
+            filename_pattern: { type: 'string', description: 'Pattern to match' },
+            include_subdirs: { type: 'boolean', description: 'Include subdirectories' },
+            max_results: { type: 'number', description: 'Maximum results to return' }
+          },
+          required: []
+        }
+      },
+      {
+        name: 'get_common_excel_locations',
+        description: 'Get common locations where Excel files are typically stored',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'get_data_validation_info',
+        description: 'Get all data validation rules in a worksheet',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' }
+          },
+          required: ['filepath', 'sheet_name']
+        }
+      },
+      {
+        name: 'format_range',
+        description: 'Apply formatting to a range of cells',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filepath: { type: 'string', description: 'Path to Excel file' },
+            sheet_name: { type: 'string', description: 'Name of worksheet' },
+            start_cell: { type: 'string', description: 'Starting cell' },
+            end_cell: { type: 'string', description: 'Ending cell (optional)' },
+            bold: { type: 'boolean', description: 'Make text bold' },
+            italic: { type: 'boolean', description: 'Make text italic' },
+            underline: { type: 'boolean', description: 'Make text underlined' },
+            font_size: { type: 'number', description: 'Font size' },
+            font_color: { type: 'string', description: 'Font color' },
+            bg_color: { type: 'string', description: 'Background color' },
+            border_style: { type: 'string', description: 'Border style' },
+            border_color: { type: 'string', description: 'Border color' },
+            number_format: { type: 'string', description: 'Number format' },
+            alignment: { type: 'string', description: 'Text alignment' },
+            wrap_text: { type: 'boolean', description: 'Wrap text' },
+            merge_cells: { type: 'boolean', description: 'Merge cells' }
+          },
+          required: ['filepath', 'sheet_name', 'start_cell']
+        }
+      }
+    ];
+
+    return excelTools;
   }
 }
 

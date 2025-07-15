@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import uuid
 import asyncio
+import json
 
 import sys
 import os
@@ -43,25 +44,59 @@ class DataExtractionAgent:
         self.db_manager = DatabaseManager(DATABASE_CONFIG)
         self.file_processor = FileProcessor()
         
+        # Store reference to MCP tools (will be set by MCP server)
+        self.mcp_tools = None
+        
         self.logger.info(f"Data Extraction Agent initialized with model: {self.config.model}")
     
+    def set_mcp_tools(self, mcp_tools):
+        """Set MCP tools for Excel operations"""
+        self.mcp_tools = mcp_tools
+        self.logger.info("MCP tools configured for Excel operations")
+    
     async def process_excel_file(self, file_path: str) -> ExcelProcessingResult:
-        """Process an Excel file and extract company data"""
+        """Process an Excel file and extract company data using MCP Excel tools"""
         try:
             self.logger.info(f"Processing Excel file: {file_path}")
             
-            # Read Excel file
-            df = pd.read_excel(file_path)
+            # Get workbook metadata first
+            workbook_info = await self._get_workbook_info(file_path)
+            if not workbook_info:
+                return ExcelProcessingResult(
+                    success=False,
+                    company_data=None,
+                    errors=["Failed to read workbook metadata"],
+                    warnings=[],
+                    processed_rows=0
+                )
+            
+            # Process the first sheet (or main data sheet)
+            sheet_name = workbook_info.get('sheets', [{}])[0].get('name', 'Sheet1')
+            
+            # Read data from Excel using MCP tools
+            excel_data = await self._read_excel_data(file_path, sheet_name)
+            if not excel_data:
+                return ExcelProcessingResult(
+                    success=False,
+                    company_data=None,
+                    errors=["Failed to read Excel data"],
+                    warnings=[],
+                    processed_rows=0
+                )
             
             processed_rows = 0
             errors = []
             warnings = []
             company_data_list = []
             
-            for index, row in df.iterrows():
+            # Process each row of data
+            for index, cell_data in enumerate(excel_data.get('cells', [])):
                 try:
-                    # Convert row to dictionary
-                    row_dict = row.to_dict()
+                    # Convert cell data to row dictionary
+                    row_dict = self._convert_cells_to_row(cell_data, index)
+                    
+                    if not row_dict:  # Skip empty rows
+                        continue
                     
                     # Parse and clean data
                     cleaned_data = parse_excel_data(row_dict)
@@ -158,6 +193,142 @@ class DataExtractionAgent:
         except Exception as e:
             self.logger.error(f"Error extracting structured data: {str(e)}")
             return None
+    
+    async def _get_workbook_info(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get workbook metadata using MCP Excel tools"""
+        try:
+            if not self.mcp_tools:
+                self.logger.warning("MCP tools not configured, falling back to pandas")
+                return {"sheets": [{"name": "Sheet1"}]}
+            
+            # Use MCP tool to get workbook metadata
+            result = await self.mcp_tools.call_tool("get_workbook_metadata", {
+                "filepath": file_path,
+                "include_ranges": True
+            })
+            
+            if isinstance(result, str):
+                # Parse string response
+                try:
+                    return json.loads(result)
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Failed to parse workbook metadata: {result}")
+                    return {"sheets": [{"name": "Sheet1"}]}
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error getting workbook info: {str(e)}")
+            return None
+    
+    async def _read_excel_data(self, file_path: str, sheet_name: str) -> Optional[Dict[str, Any]]:
+        """Read Excel data using MCP Excel tools"""
+        try:
+            if not self.mcp_tools:
+                self.logger.warning("MCP tools not configured, falling back to pandas")
+                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                # Convert to MCP-like format
+                cells = []
+                for idx, row in df.iterrows():
+                    for col, value in row.items():
+                        cells.append({
+                            "address": f"{col}{idx+1}",
+                            "value": value,
+                            "row": idx+1,
+                            "column": col
+                        })
+                return {"cells": cells}
+            
+            # Use MCP tool to read Excel data
+            result = await self.mcp_tools.call_tool("read_data_from_excel", {
+                "filepath": file_path,
+                "sheet_name": sheet_name,
+                "start_cell": "A1",
+                "preview_only": False
+            })
+            
+            if isinstance(result, str):
+                try:
+                    return json.loads(result)
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Failed to parse Excel data: {result}")
+                    return None
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error reading Excel data: {str(e)}")
+            return None
+    
+    def _convert_cells_to_row(self, cell_data: Dict[str, Any], row_index: int) -> Optional[Dict[str, Any]]:
+        """Convert cell data to row dictionary"""
+        try:
+            if not isinstance(cell_data, dict):
+                return None
+            
+            # Group cells by row
+            row_data = {}
+            for cell in cell_data.get('cells', []):
+                if cell.get('row') == row_index + 1:  # Excel rows are 1-indexed
+                    column = cell.get('column', '')
+                    value = cell.get('value')
+                    if value is not None:
+                        row_data[column] = value
+            
+            return row_data if row_data else None
+            
+        except Exception as e:
+            self.logger.error(f"Error converting cells to row: {str(e)}")
+            return None
+    
+    async def search_excel_files(self, search_path: str = "~", filename_pattern: str = "*.xlsx", include_subdirs: bool = True) -> AgentResponse:
+        """Search for Excel files on the filesystem"""
+        try:
+            if not self.mcp_tools:
+                return create_error_response("MCP tools not configured - cannot search for Excel files")
+            
+            # Get common Excel locations first
+            common_locations = await self.mcp_tools.call_tool("get_common_excel_locations", {})
+            
+            # Search for Excel files
+            search_results = await self.mcp_tools.call_tool("search_excel_files", {
+                "search_path": search_path,
+                "filename_pattern": filename_pattern,
+                "include_subdirs": include_subdirs,
+                "max_results": 50
+            })
+            
+            if isinstance(search_results, str):
+                try:
+                    search_data = json.loads(search_results)
+                except json.JSONDecodeError:
+                    return create_error_response(f"Failed to parse search results: {search_results}")
+            else:
+                search_data = search_results
+            
+            if isinstance(common_locations, str):
+                try:
+                    locations_data = json.loads(common_locations)
+                except json.JSONDecodeError:
+                    locations_data = {}
+            else:
+                locations_data = common_locations
+            
+            result_data = {
+                "search_results": search_data,
+                "common_locations": locations_data,
+                "timestamp": get_current_timestamp()
+            }
+            
+            return create_success_response(
+                f"Found {search_data.get('total_found', 0)} Excel files",
+                data=result_data
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to search for Excel files: {str(e)}"
+            self.logger.error(error_msg)
+            return create_error_response(error_msg)
     
     def _create_company_data(self, structured_data: Dict[str, Any]) -> CompanyData:
         """Create CompanyData object from structured data"""
