@@ -59,7 +59,8 @@ export async function POST(request: Request) {
         const functionName = call.functionCall.name
         const args = call.functionCall.args
         
-        if (functionName.startsWith('firecrawl_')) {
+        // Handle both firecrawl and columbia-lake-agents tools
+        if (functionName.startsWith('firecrawl_') || functionName.startsWith('columbia-lake-agents_')) {
           try {
             const result = await executeMCPTool(functionName, args)
             functionResults.push({

@@ -89,8 +89,8 @@ export async function POST(request: Request) {
         const argumentsString = toolCall.function.arguments.trim()
         const parsedArgs = JSON.parse(argumentsString)
 
-        // Check if this is an MCP tool (starts with firecrawl_)
-        if (functionName.startsWith('firecrawl_')) {
+        // Check if this is an MCP tool (starts with firecrawl_ or columbia-lake-agents_)
+        if (functionName.startsWith('firecrawl_') || functionName.startsWith('columbia-lake-agents_')) {
           try {
             const mcpResult = await executeMCPTool(functionName, parsedArgs)
             
