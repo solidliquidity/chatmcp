@@ -10,9 +10,9 @@ export class FirecrawlMCPClient {
     if (this.isConnected) return;
 
     return new Promise((resolve, reject) => {
-      this.process = spawn('npx', ['firecrawl-mcp'], {
+      console.log('Starting MCP client with API key:', process.env.FIRECRAWL_API_KEY ? 'SET' : 'NOT SET');
+      this.process = spawn('firecrawl-mcp', [], {
         stdio: 'pipe',
-        cwd: process.cwd() + '/../firecrawl-mcp',
         env: {
           ...process.env,
           FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || ''

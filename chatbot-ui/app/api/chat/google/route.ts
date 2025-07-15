@@ -22,6 +22,8 @@ export async function POST(request: Request) {
     
     // Get MCP tools and convert to Google format
     const mcpTools = await getMCPTools()
+    console.log('MCP Tools found:', mcpTools.length, mcpTools.map(t => t.function?.name))
+    
     const googleTools = mcpTools.map(tool => ({
       functionDeclaration: {
         name: tool.function.name,
