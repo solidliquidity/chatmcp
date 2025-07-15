@@ -66,7 +66,7 @@ class ColumbiaLakeMCPServer:
                         
                         # Start the excel-mcp-server process
                         self.process = subprocess.Popen([
-                            '/Users/solidliquidity/.pyenv/versions/3.11.6/bin/python3',
+                            'python3',
                             '-m', 'excel_mcp', 'stdio'
                         ], 
                         stdin=subprocess.PIPE, 
@@ -126,6 +126,18 @@ class ColumbiaLakeMCPServer:
                         else:
                             raise Exception("Excel MCP server not connected")
                     
+                    # Special handling for search_excel_files to ensure proper path format
+                    if tool_name == "search_excel_files":
+                        # Expand home directory if needed
+                        if "search_path" in args:
+                            search_path = args["search_path"]
+                            if search_path in ["~", "~/", "home", "home directory"]:
+                                args["search_path"] = os.path.expanduser("~")
+                            elif search_path.startswith("~/"):
+                                args["search_path"] = os.path.expanduser(search_path)
+                        
+                        self.logger.info(f"[DEBUG] Processed search_excel_files args: {args}")
+                    
                     try:
                         # Send tool call request
                         request = {
@@ -137,6 +149,8 @@ class ColumbiaLakeMCPServer:
                                 "arguments": args
                             }
                         }
+                        
+                        self.logger.info(f"[DEBUG] Sending tool call to excel-mcp server: {json.dumps(request, indent=2)}")
                         
                         self.request_id += 1
                         self.process.stdin.write(json.dumps(request) + '\n')

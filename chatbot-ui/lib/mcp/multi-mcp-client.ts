@@ -249,10 +249,13 @@ export class MCPClient {
   }
 
   async callTool(name: string, args: any): Promise<any> {
-    const response = await this.sendRequest('tools/call', {
+    console.log(`[DEBUG] MCPClient.callTool - tool: ${name}, args:`, JSON.stringify(args, null, 2));
+    const requestParams = {
       name,
       arguments: args
-    });
+    };
+    console.log(`[DEBUG] Sending tools/call request:`, JSON.stringify(requestParams, null, 2));
+    const response = await this.sendRequest('tools/call', requestParams);
     return response;
   }
 
@@ -308,9 +311,9 @@ export class MultiMCPClient {
 
       // Load Excel MCP server configuration
       const excelConfig: MCPServerConfig = {
-        command: '/Users/solidliquidity/.pyenv/versions/3.11.6/bin/python3',
+        command: 'python3',
         args: ['-m', 'excel_mcp', 'stdio'],
-        cwd: path.join(process.cwd(), '..'),
+        cwd: path.join(process.cwd(), '..', 'excel-mcp-server'),
         env: {
           EXCEL_FILES_PATH: process.env.EXCEL_FILES_PATH || path.join(process.cwd(), '..', 'excel-files')
         }
@@ -368,13 +371,13 @@ export class MultiMCPClient {
         let tools: any[] = [];
         
         try {
-          tools = await client.listTools();
-          console.log(`Raw tools from ${serverName}:`, tools.length, tools);
-          
           // For Excel MCP server, always use manual discovery since it may not support tools/list properly
           if (serverName === 'excel-mcp') {
-            console.log(`Using manually discovered tools for ${serverName} (override)`);
+            console.log(`Using manually discovered tools for ${serverName} (forced override)`);
             tools = this.getExcelMCPServerTools();
+          } else {
+            tools = await client.listTools();
+            console.log(`Raw tools from ${serverName}:`, tools.length, tools);
           }
         } catch (error) {
           // For Excel MCP server, use manually discovered tools
@@ -419,6 +422,21 @@ export class MultiMCPClient {
     }
 
     try {
+      console.log(`[DEBUG] Executing tool ${toolName} with args:`, JSON.stringify(args, null, 2));
+      console.log(`[DEBUG] Actual tool name: ${actualToolName}`);
+      
+      // Special handling for excel-mcp tools - use fallback for now
+      if (serverName === 'excel-mcp') {
+        console.log(`[DEBUG] Using fallback implementation for excel-mcp tool: ${actualToolName}`);
+        if (actualToolName === 'search_excel_files') {
+          return await this.executeExcelSearchFallback(args);
+        } else if (actualToolName === 'get_common_excel_locations') {
+          return await this.executeExcelLocationsFallback();
+        } else {
+          throw new Error(`Excel MCP tool ${actualToolName} not implemented in fallback`);
+        }
+      }
+      
       return await client.callTool(actualToolName, args);
     } catch (error) {
       console.error(`Error executing tool ${toolName}:`, error);
@@ -722,14 +740,30 @@ export class MultiMCPClient {
       },
       {
         name: 'search_excel_files',
-        description: 'Search for Excel files on the filesystem',
+        description: 'Search for Excel files on the filesystem. Use "." for current directory or absolute paths like "/Users/username" instead of "~".',
         inputSchema: {
           type: 'object',
           properties: {
-            search_path: { type: 'string', description: 'Directory to search in' },
-            filename_pattern: { type: 'string', description: 'Pattern to match' },
-            include_subdirs: { type: 'boolean', description: 'Include subdirectories' },
-            max_results: { type: 'number', description: 'Maximum results to return' }
+            search_path: { 
+              type: 'string', 
+              description: 'Directory to search in (default: current directory ".")',
+              default: '.'
+            },
+            filename_pattern: { 
+              type: 'string', 
+              description: 'Pattern to match (default: "*.xlsx", supports *.xls, *.xlsm)',
+              default: '*.xlsx'
+            },
+            include_subdirs: { 
+              type: 'boolean', 
+              description: 'Whether to search subdirectories recursively (default: true)',
+              default: true
+            },
+            max_results: { 
+              type: 'number', 
+              description: 'Maximum number of results to return (default: 50)',
+              default: 50
+            }
           },
           required: []
         }
@@ -784,6 +818,150 @@ export class MultiMCPClient {
     ];
 
     return excelTools;
+  }
+
+  private async executeExcelSearchFallback(args: any): Promise<any> {
+    console.log('[DEBUG] Executing Excel search fallback with args:', args);
+    
+    const searchPath = args.search_path || '~';
+    const filenamePattern = args.filename_pattern || '*.xlsx';
+    const includeSubdirs = args.include_subdirs !== false;
+    const maxResults = args.max_results || 50;
+    
+    // Expand home directory
+    const expandedPath = searchPath === '~' || searchPath === 'home' || searchPath === 'home directory' 
+      ? require('os').homedir() 
+      : searchPath.startsWith('~/') 
+        ? require('path').join(require('os').homedir(), searchPath.slice(2))
+        : searchPath;
+    
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const glob = require('glob');
+      
+      // Build search pattern
+      const pattern = includeSubdirs 
+        ? path.join(expandedPath, '**', filenamePattern)
+        : path.join(expandedPath, filenamePattern);
+      
+      console.log(`[DEBUG] Searching with pattern: ${pattern}`);
+      
+      // Find files
+      const foundFiles: any[] = [];
+      const files = glob.sync(pattern, { maxFiles: maxResults });
+      
+      for (const filepath of files) {
+        try {
+          const stat = fs.statSync(filepath);
+          const fileInfo = {
+            filepath: filepath,
+            filename: path.basename(filepath),
+            directory: path.dirname(filepath),
+            size_bytes: stat.size,
+            size_mb: Math.round(stat.size / (1024 * 1024) * 100) / 100,
+            modified: stat.mtime.getTime() / 1000,
+            modified_readable: stat.mtime.toISOString().slice(0, 19).replace('T', ' ')
+          };
+          foundFiles.push(fileInfo);
+        } catch (error) {
+          console.warn(`Error getting info for ${filepath}:`, error);
+          continue;
+        }
+      }
+      
+      // Sort by modification time (newest first)
+      foundFiles.sort((a, b) => b.modified - a.modified);
+      
+      const result = {
+        search_path: expandedPath,
+        pattern: filenamePattern,
+        include_subdirs: includeSubdirs,
+        total_found: foundFiles.length,
+        files: foundFiles
+      };
+      
+      console.log(`[DEBUG] Excel search fallback found ${foundFiles.length} files`);
+      return result;
+      
+    } catch (error) {
+      console.error('[DEBUG] Excel search fallback error:', error);
+      return {
+        error: `Search failed: ${error.message}`,
+        search_path: expandedPath,
+        pattern: filenamePattern,
+        total_found: 0,
+        files: []
+      };
+    }
+  }
+
+  private async executeExcelLocationsFallback(): Promise<any> {
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    
+    const homeDir = os.homedir();
+    const platform = os.platform();
+    const commonLocations: any[] = [];
+    
+    let locations: string[] = [];
+    if (platform === 'darwin') { // macOS
+      locations = [
+        path.join(homeDir, 'Desktop'),
+        path.join(homeDir, 'Documents'),
+        path.join(homeDir, 'Downloads'),
+        path.join(homeDir, 'Library', 'CloudStorage')
+      ];
+    } else if (platform === 'win32') { // Windows
+      locations = [
+        path.join(homeDir, 'Desktop'),
+        path.join(homeDir, 'Documents'),
+        path.join(homeDir, 'Downloads'),
+        path.join(homeDir, 'OneDrive')
+      ];
+    } else { // Linux
+      locations = [
+        path.join(homeDir, 'Desktop'),
+        path.join(homeDir, 'Documents'),
+        path.join(homeDir, 'Downloads')
+      ];
+    }
+    
+    for (const location of locations) {
+      try {
+        if (fs.existsSync(location)) {
+          const files = fs.readdirSync(location);
+          const excelCount = files.filter((f: string) => 
+            f.endsWith('.xlsx') || f.endsWith('.xls') || f.endsWith('.xlsm')
+          ).length;
+          
+          commonLocations.push({
+            path: location,
+            exists: true,
+            excel_files_count: excelCount
+          });
+        } else {
+          commonLocations.push({
+            path: location,
+            exists: false,
+            excel_files_count: 0
+          });
+        }
+      } catch (error) {
+        commonLocations.push({
+          path: location,
+          exists: true,
+          excel_files_count: 'Permission denied'
+        });
+      }
+    }
+    
+    return {
+      os: platform,
+      home_directory: homeDir,
+      common_locations: commonLocations
+    };
   }
 }
 
