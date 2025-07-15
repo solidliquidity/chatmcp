@@ -5,7 +5,7 @@ import { ChatSettings } from "@/types"
 import { OpenAIStream, StreamingTextResponse } from "ai"
 import OpenAI from "openai"
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions.mjs"
-import { getMCPTools, executeMCPTool } from "@/lib/mcp/mcp-integration"
+import { getMCPTools, executeMCPTool, generateSystemPrompt } from "@/lib/mcp/mcp-integration"
 
 export async function POST(request: Request) {
   const json = await request.json()
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
     // Add MCP tools
     const mcpTools = await getMCPTools()
-    allTools = allTools.concat(mcpTools)
+    allTools = allTools.concat(mcpTools as any)
 
     for (const selectedTool of selectedTools) {
       try {
@@ -64,9 +64,18 @@ export async function POST(request: Request) {
       }
     }
 
+    // Generate system prompt for MCP tools
+    const systemPrompt = generateSystemPrompt(mcpTools);
+    
+    // Add system message if we have tools
+    const messagesWithSystem = systemPrompt ? [
+      { role: 'system', content: systemPrompt },
+      ...messages
+    ] : messages;
+    
     const firstResponse = await openai.chat.completions.create({
       model: chatSettings.model as ChatCompletionCreateParamsBase["model"],
-      messages,
+      messages: messagesWithSystem,
       tools: allTools.length > 0 ? allTools : undefined
     })
 
@@ -89,8 +98,8 @@ export async function POST(request: Request) {
         const argumentsString = toolCall.function.arguments.trim()
         const parsedArgs = JSON.parse(argumentsString)
 
-        // Check if this is an MCP tool (starts with firecrawl_ or columbia-lake-agents_)
-        if (functionName.startsWith('firecrawl_') || functionName.startsWith('columbia-lake-agents_')) {
+        // Check if this is an MCP tool (starts with firecrawl_, columbia-lake-agents_, or excel-mcp_)
+        if (functionName.startsWith('firecrawl_') || functionName.startsWith('columbia-lake-agents_') || functionName.startsWith('excel-mcp_')) {
           try {
             const mcpResult = await executeMCPTool(functionName, parsedArgs)
             
@@ -102,14 +111,14 @@ export async function POST(request: Request) {
             })
             
             continue
-          } catch (error) {
+          } catch (error: any) {
             console.error('MCP tool execution failed:', error)
             
             messages.push({
               tool_call_id: toolCall.id,
               role: "tool", 
               name: functionName,
-              content: JSON.stringify({ error: error.message })
+              content: JSON.stringify({ error: error.message || 'Unknown error' })
             })
             
             continue
@@ -236,7 +245,7 @@ export async function POST(request: Request) {
       stream: true
     })
 
-    const stream = OpenAIStream(secondResponse)
+    const stream = OpenAIStream(secondResponse as any)
 
     return new StreamingTextResponse(stream)
   } catch (error: any) {

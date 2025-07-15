@@ -4,7 +4,7 @@ import { OpenAIStream, StreamingTextResponse } from "ai"
 import { ServerRuntime } from "next"
 import OpenAI from "openai"
 import { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions.mjs"
-import { getMCPTools, executeMCPTool } from "@/lib/mcp/mcp-integration"
+import { getMCPTools, executeMCPTool, generateSystemPrompt } from "@/lib/mcp/mcp-integration"
 
 export const runtime: ServerRuntime = "nodejs"
 
@@ -29,6 +29,15 @@ export async function POST(request: Request) {
     const mcpTools = await getMCPTools()
     console.log('MCP Tools found for OpenRouter:', mcpTools.length, mcpTools.map(t => t.function?.name))
 
+    // Generate system prompt for MCP tools
+    const systemPrompt = generateSystemPrompt(mcpTools);
+    
+    // Add system message if we have tools
+    const messagesWithSystem = systemPrompt ? [
+      { role: 'system', content: systemPrompt },
+      ...messages
+    ] : messages;
+
     // Convert MCP tools to OpenAI format
     const openaiTools = mcpTools.map(tool => ({
       type: 'function' as const,
@@ -42,7 +51,7 @@ export async function POST(request: Request) {
     // First, make a non-streaming request to check for tool calls
     const firstResponse = await openai.chat.completions.create({
       model: chatSettings.model as ChatCompletionCreateParamsBase["model"],
-      messages: messages as ChatCompletionCreateParamsBase["messages"],
+      messages: messagesWithSystem as ChatCompletionCreateParamsBase["messages"],
       temperature: chatSettings.temperature,
       max_tokens: undefined,
       tools: openaiTools.length > 0 ? openaiTools : undefined,
@@ -75,14 +84,14 @@ export async function POST(request: Request) {
               name: functionName,
               content: JSON.stringify(mcpResult)
             })
-          } catch (error) {
+          } catch (error: any) {
             console.error('MCP tool execution failed:', error)
             
             messages.push({
               tool_call_id: toolCall.id,
               role: "tool", 
               name: functionName,
-              content: JSON.stringify({ error: error.message })
+              content: JSON.stringify({ error: error.message || 'Unknown error' })
             })
           }
         }
@@ -97,7 +106,7 @@ export async function POST(request: Request) {
         stream: true
       })
 
-      const stream = OpenAIStream(finalResponse)
+      const stream = OpenAIStream(finalResponse as any)
       return new StreamingTextResponse(stream)
     }
 
@@ -110,7 +119,7 @@ export async function POST(request: Request) {
       stream: true
     })
 
-    const stream = OpenAIStream(response)
+    const stream = OpenAIStream(response as any)
     return new StreamingTextResponse(stream)
   } catch (error: any) {
     let errorMessage = error.message || "An unexpected error occurred"

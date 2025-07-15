@@ -432,6 +432,10 @@ export class MultiMCPClient {
           return await this.executeExcelSearchFallback(args);
         } else if (actualToolName === 'get_common_excel_locations') {
           return await this.executeExcelLocationsFallback();
+        } else if (actualToolName === 'read_data_from_excel') {
+          return await this.executeExcelReadFallback(args);
+        } else if (actualToolName === 'get_workbook_metadata') {
+          return await this.executeExcelMetadataFallback(args);
         } else {
           throw new Error(`Excel MCP tool ${actualToolName} not implemented in fallback`);
         }
@@ -962,6 +966,179 @@ export class MultiMCPClient {
       home_directory: homeDir,
       common_locations: commonLocations
     };
+  }
+
+  private async executeExcelReadFallback(args: any): Promise<any> {
+    console.log('[DEBUG] Executing Excel read fallback with args:', args);
+    
+    try {
+      const XLSX = require('xlsx');
+      const path = require('path');
+      const fs = require('fs');
+      
+      let filepath = args.filepath;
+      const sheetName = args.sheet_name || 'Sheet1';
+      const startCell = args.start_cell || 'A1';
+      const previewOnly = args.preview_only || false;
+      
+      // Expand home directory in filepath
+      if (filepath.startsWith('~')) {
+        filepath = path.join(require('os').homedir(), filepath.slice(1));
+      }
+      
+      // Check if file exists
+      if (!fs.existsSync(filepath)) {
+        return {
+          error: `File not found: ${filepath}`,
+          filepath: filepath,
+          sheet_name: sheetName
+        };
+      }
+      
+      console.log(`[DEBUG] Reading Excel file: ${filepath}, sheet: ${sheetName}`);
+      
+      // Read the Excel file
+      const workbook = XLSX.readFile(filepath);
+      
+      // Check if sheet exists
+      if (!workbook.SheetNames.includes(sheetName)) {
+        return {
+          error: `Sheet '${sheetName}' not found in workbook`,
+          filepath: filepath,
+          available_sheets: workbook.SheetNames
+        };
+      }
+      
+      const worksheet = workbook.Sheets[sheetName];
+      
+      // Convert to JSON with cell addresses
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+        header: 1, 
+        defval: null,
+        raw: false 
+      });
+      
+      // Convert to cell format similar to what the MCP server would return
+      const cells: any[] = [];
+      const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+      
+      for (let row = range.s.r; row <= Math.min(range.e.r, previewOnly ? 20 : range.e.r); row++) {
+        for (let col = range.s.c; col <= range.e.c; col++) {
+          const cellAddr = XLSX.utils.encode_cell({ r: row, c: col });
+          const cell = worksheet[cellAddr];
+          
+          if (cell) {
+            cells.push({
+              address: cellAddr,
+              value: cell.v,
+              type: cell.t,
+              format: cell.z || null,
+              row: row + 1,
+              column: XLSX.utils.encode_col(col)
+            });
+          }
+        }
+      }
+      
+      const result = {
+        filepath: filepath,
+        sheet_name: sheetName,
+        range: worksheet['!ref'] || 'A1',
+        total_rows: range.e.r + 1,
+        total_columns: range.e.c + 1,
+        preview_only: previewOnly,
+        cells: cells,
+        data: jsonData.slice(0, previewOnly ? 20 : jsonData.length)
+      };
+      
+      console.log(`[DEBUG] Excel read fallback found ${cells.length} cells`);
+      return result;
+      
+    } catch (error) {
+      console.error('[DEBUG] Excel read fallback error:', error);
+      return {
+        error: `Failed to read Excel file: ${error.message}`,
+        filepath: args.filepath,
+        sheet_name: args.sheet_name
+      };
+    }
+  }
+
+  private async executeExcelMetadataFallback(args: any): Promise<any> {
+    console.log('[DEBUG] Executing Excel metadata fallback with args:', args);
+    
+    try {
+      const XLSX = require('xlsx');
+      const path = require('path');
+      const fs = require('fs');
+      
+      let filepath = args.filepath;
+      const includeRanges = args.include_ranges || false;
+      
+      // Expand home directory in filepath
+      if (filepath.startsWith('~')) {
+        filepath = path.join(require('os').homedir(), filepath.slice(1));
+      }
+      
+      // Check if file exists
+      if (!fs.existsSync(filepath)) {
+        return {
+          error: `File not found: ${filepath}`,
+          filepath: filepath
+        };
+      }
+      
+      console.log(`[DEBUG] Reading Excel metadata: ${filepath}`);
+      
+      // Read the Excel file
+      const workbook = XLSX.readFile(filepath);
+      
+      // Get file stats
+      const stats = fs.statSync(filepath);
+      
+      // Build sheet information
+      const sheets = workbook.SheetNames.map(name => {
+        const worksheet = workbook.Sheets[name];
+        const range = worksheet['!ref'] || 'A1';
+        const decodedRange = XLSX.utils.decode_range(range);
+        
+        const sheetInfo: any = {
+          name: name,
+          range: range,
+          rows: decodedRange.e.r + 1,
+          columns: decodedRange.e.c + 1
+        };
+        
+        if (includeRanges) {
+          // Add more detailed range information
+          sheetInfo.start_cell = XLSX.utils.encode_cell(decodedRange.s);
+          sheetInfo.end_cell = XLSX.utils.encode_cell(decodedRange.e);
+          sheetInfo.used_range = range;
+        }
+        
+        return sheetInfo;
+      });
+      
+      const result = {
+        filepath: filepath,
+        filename: path.basename(filepath),
+        file_size: stats.size,
+        modified: stats.mtime.toISOString(),
+        sheets: sheets,
+        total_sheets: sheets.length,
+        include_ranges: includeRanges
+      };
+      
+      console.log(`[DEBUG] Excel metadata fallback found ${sheets.length} sheets`);
+      return result;
+      
+    } catch (error) {
+      console.error('[DEBUG] Excel metadata fallback error:', error);
+      return {
+        error: `Failed to read Excel metadata: ${error.message}`,
+        filepath: args.filepath
+      };
+    }
   }
 }
 

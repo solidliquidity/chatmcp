@@ -1,7 +1,7 @@
 import { checkApiKey, getServerProfile } from "@/lib/server/server-chat-helpers"
 import { ChatSettings } from "@/types"
 import { GoogleGenerativeAI } from "@google/generative-ai"
-import { getMCPTools, executeMCPTool } from "@/lib/mcp/mcp-integration"
+import { getMCPTools, executeMCPTool, generateSystemPrompt } from "@/lib/mcp/mcp-integration"
 
 // export const runtime = "edge"
 
@@ -32,23 +32,13 @@ export async function POST(request: Request) {
       }
     }))
 
+    // Generate comprehensive system prompt
+    const systemPrompt = generateSystemPrompt(mcpTools);
+    
     const googleModel = genAI.getGenerativeModel({ 
       model: chatSettings.model,
       tools: googleTools.length > 0 ? [{ functionDeclarations: googleTools.map(t => t.functionDeclaration) }] : undefined,
-      toolConfig: googleTools.length > 0 ? {
-        functionCallingConfig: {
-          mode: "ANY",
-          allowedFunctionNames: googleTools.map(t => t.functionDeclaration.name)
-        }
-      } : undefined,
-      systemInstruction: googleTools.length > 0 ? 
-        `You are an AI assistant with access to specialized tools. You have access to these tools: ${googleTools.map(t => t.functionDeclaration.name).join(', ')}. When a user asks for information or actions that can be performed by your available tools, you MUST use the appropriate tool functions rather than declining or explaining limitations. For example:
-        - If asked to test connections, use columbia-lake-agents_test_connection
-        - If asked to analyze company health, use columbia-lake-agents_analyze_company_health
-        - If asked to process files, use columbia-lake-agents_process_excel_file
-        - If asked about dashboard or alerts, use columbia-lake-agents_get_alert_dashboard
-        Always attempt to use the relevant tool first before providing a general response.` : 
-        undefined
+      systemInstruction: systemPrompt || undefined
     })
 
     const lastMessage = messages.pop()
@@ -74,6 +64,7 @@ export async function POST(request: Request) {
       const functionResults = []
       
       for (const call of functionCalls) {
+        if (!call.functionCall) continue;
         const functionName = call.functionCall.name
         const args = call.functionCall.args
         
@@ -87,11 +78,11 @@ export async function POST(request: Request) {
                 response: result
               }
             })
-          } catch (error) {
+          } catch (error: any) {
             functionResults.push({
               functionResponse: {
                 name: functionName,
-                response: { error: error.message }
+                response: { error: error.message || 'Unknown error' }
               }
             })
           }

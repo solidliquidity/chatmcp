@@ -42,6 +42,64 @@ export async function getMCPTools() {
   }
 }
 
+// Generate comprehensive system prompt for LLM
+export function generateSystemPrompt(tools: any[]): string {
+  if (tools.length === 0) {
+    return '';
+  }
+
+  const toolNames = tools.map(tool => tool.function?.name || tool.name).join(', ');
+  
+  // Group tools by server for better organization
+  const firecrawlTools = tools.filter(tool => {
+    const name = tool.function?.name || tool.name;
+    return name.startsWith('firecrawl_');
+  });
+  
+  const columbiaLakeTools = tools.filter(tool => {
+    const name = tool.function?.name || tool.name;
+    return name.startsWith('columbia-lake-agents_');
+  });
+  
+  const excelTools = tools.filter(tool => {
+    const name = tool.function?.name || tool.name;
+    return name.startsWith('excel-mcp_');
+  });
+
+  let systemPrompt = `You are an AI assistant with access to specialized tools. You have access to these tools: ${toolNames}.
+
+IMPORTANT: When a user asks for information or actions that can be performed by your available tools, you MUST use the appropriate tool functions rather than declining or explaining limitations. Always attempt to use the relevant tool first before providing a general response.
+
+Available tool categories:`;
+
+  if (firecrawlTools.length > 0) {
+    systemPrompt += `\n\nWEB SCRAPING & RESEARCH TOOLS (firecrawl_*):
+- Use for: Website cloning, content extraction, web research, data scraping
+- Examples: ${firecrawlTools.map(t => t.function?.name || t.name).join(', ')}`;
+  }
+
+  if (columbiaLakeTools.length > 0) {
+    systemPrompt += `\n\nBUSINESS INTELLIGENCE TOOLS (columbia-lake-agents_*):
+- Use for: Company analysis, Excel file processing, portfolio management, health monitoring
+- Examples: ${columbiaLakeTools.map(t => t.function?.name || t.name).join(', ')}`;
+  }
+
+  if (excelTools.length > 0) {
+    systemPrompt += `\n\nEXCEL MANIPULATION TOOLS (excel-mcp_*):
+- Use for: Excel file operations, data reading/writing, formula application, workbook management
+- Examples: ${excelTools.map(t => t.function?.name || t.name).join(', ')}`;
+  }
+
+  systemPrompt += `\n\nSPECIFIC GUIDELINES:
+- For Excel operations: Use excel-mcp_* tools for direct Excel file manipulation
+- For company data: Use columbia-lake-agents_* tools for business intelligence
+- For web research: Use firecrawl_* tools for web scraping and content extraction
+- Always use the most specific tool available for the task
+- If multiple tools could apply, choose the one that best fits the user's intent`;
+
+  return systemPrompt;
+}
+
 export async function executeMCPTool(toolName: string, args: any): Promise<any> {
   try {
     // Check if this is a multi-MCP tool (has server prefix)
