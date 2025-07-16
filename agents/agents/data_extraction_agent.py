@@ -27,6 +27,7 @@ from shared.utils import (
 )
 from tools.database import DatabaseManager
 from tools.file_operations import FileProcessor
+from mcp_tools_client import get_unified_mcp_client
 
 class DataExtractionAgent:
     """Agent for extracting data from Excel sheets and populating database"""
@@ -44,19 +45,34 @@ class DataExtractionAgent:
         self.db_manager = DatabaseManager(DATABASE_CONFIG)
         self.file_processor = FileProcessor()
         
-        # Store reference to MCP tools (will be set by MCP server)
+        # Store reference to unified MCP tools client
         self.mcp_tools = None
         
         self.logger.info(f"Data Extraction Agent initialized with model: {self.config.model}")
     
+    async def initialize_mcp_tools(self):
+        """Initialize unified MCP tools client with access to ALL MCP servers"""
+        if self.mcp_tools is None:
+            self.mcp_tools = await get_unified_mcp_client(self.logger)
+            available_tools = self.mcp_tools.get_available_tools()
+            total_tools = sum(len(tools) for tools in available_tools.values())
+            self.logger.info(f"Initialized with {total_tools} MCP tools from {len(available_tools)} servers")
+            
+            # Log available tools for debugging
+            for server, tools in available_tools.items():
+                self.logger.info(f"  {server}: {len(tools)} tools - {tools[:3]}...")
+    
     def set_mcp_tools(self, mcp_tools):
-        """Set MCP tools for Excel operations"""
+        """Set MCP tools for backwards compatibility"""
         self.mcp_tools = mcp_tools
-        self.logger.info("MCP tools configured for Excel operations")
+        self.logger.info("MCP tools configured for operations")
     
     async def process_excel_file(self, file_path: str) -> ExcelProcessingResult:
         """Process an Excel file and extract company data using MCP Excel tools"""
         try:
+            # Initialize MCP tools if not already done
+            await self.initialize_mcp_tools()
+            
             self.logger.info(f"Processing Excel file: {file_path}")
             
             # Get workbook metadata first
@@ -281,11 +297,84 @@ class DataExtractionAgent:
             self.logger.error(f"Error converting cells to row: {str(e)}")
             return None
     
+    async def research_company_online(self, company_name: str, company_website: str = None) -> AgentResponse:
+        """Research a company online using web scraping tools"""
+        try:
+            await self.initialize_mcp_tools()
+            
+            research_data = {
+                "company_name": company_name,
+                "website_data": None,
+                "search_results": None,
+                "analysis": None,
+                "timestamp": get_current_timestamp()
+            }
+            
+            # If we have a website, scrape it directly
+            if company_website:
+                try:
+                    website_content = await self.mcp_tools.call_tool("firecrawl_scrape", {
+                        "url": company_website,
+                        "formats": ["markdown"],
+                        "onlyMainContent": True
+                    })
+                    research_data["website_data"] = website_content
+                    self.logger.info(f"Successfully scraped {company_website}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to scrape {company_website}: {str(e)}")
+            
+            # Search for company information online
+            try:
+                search_query = f"{company_name} financial data revenue business information"
+                search_results = await self.mcp_tools.call_tool("firecrawl_search", {
+                    "query": search_query,
+                    "limit": 5,
+                    "scrapeOptions": {
+                        "formats": ["markdown"],
+                        "onlyMainContent": True
+                    }
+                })
+                research_data["search_results"] = search_results
+                self.logger.info(f"Found search results for {company_name}")
+            except Exception as e:
+                self.logger.warning(f"Failed to search for {company_name}: {str(e)}")
+            
+            # Use Google ADK to analyze the gathered data
+            if research_data["website_data"] or research_data["search_results"]:
+                analysis_prompt = f"""
+                Analyze the following web data about {company_name} and provide insights:
+                
+                Website Data: {research_data.get("website_data", "Not available")}
+                Search Results: {research_data.get("search_results", "Not available")}
+                
+                Provide analysis including:
+                1. Company overview and business model
+                2. Financial health indicators
+                3. Market position and competitors
+                4. Risk factors and opportunities
+                5. Recent news or developments
+                """
+                
+                try:
+                    response = await self.model.generate_content_async(analysis_prompt)
+                    research_data["analysis"] = response.text
+                except Exception as e:
+                    self.logger.error(f"Failed to analyze research data: {str(e)}")
+            
+            return create_success_response(
+                f"Online research completed for {company_name}",
+                data=research_data
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to research {company_name} online: {str(e)}"
+            self.logger.error(error_msg)
+            return create_error_response(error_msg)
+    
     async def search_excel_files(self, search_path: str = "~", filename_pattern: str = "*.xlsx", include_subdirs: bool = True) -> AgentResponse:
         """Search for Excel files on the filesystem"""
         try:
-            if not self.mcp_tools:
-                return create_error_response("MCP tools not configured - cannot search for Excel files")
+            await self.initialize_mcp_tools()
             
             # Get common Excel locations first
             common_locations = await self.mcp_tools.call_tool("get_common_excel_locations", {})

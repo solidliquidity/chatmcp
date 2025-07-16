@@ -27,10 +27,19 @@ export async function POST(request: Request) {
 
     // Get MCP tools
     const mcpTools = await getMCPTools()
-    console.log('MCP Tools found for OpenRouter:', mcpTools.length, mcpTools.map(t => t.function?.name))
+    console.log('🔧 MCP Tools Debug (OpenRouter):', {
+      mcpToolsCount: mcpTools.length,
+      mcpToolNames: mcpTools.map(t => t.function?.name || 'unknown').slice(0, 10),
+      excelToolsCount: mcpTools.filter(t => (t.function?.name || '').includes('excel')).length
+    })
 
     // Generate system prompt for MCP tools
     const systemPrompt = generateSystemPrompt(mcpTools);
+    console.log('📝 System Prompt Debug (OpenRouter):', {
+      systemPromptLength: systemPrompt.length,
+      hasExcelInPrompt: systemPrompt.includes('excel'),
+      hasSystemPrompt: systemPrompt.length > 0
+    })
     
     // Add system message if we have tools
     const messagesWithSystem = systemPrompt ? [
@@ -47,6 +56,13 @@ export async function POST(request: Request) {
         parameters: tool.function.parameters
       }
     }))
+
+    console.log('🚀 OpenRouter API Request Debug:', {
+      model: chatSettings.model,
+      hasSystemPrompt: messagesWithSystem[0]?.role === 'system',
+      toolsCount: openaiTools.length,
+      toolsIncluded: openaiTools.length > 0 ? 'YES' : 'NO'
+    })
 
     // First, make a non-streaming request to check for tool calls
     const firstResponse = await openai.chat.completions.create({

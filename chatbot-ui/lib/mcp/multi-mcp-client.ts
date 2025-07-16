@@ -15,10 +15,12 @@ interface MCPClientConfig {
 export class MCPClient {
   private process: ChildProcess | null = null;
   private isConnected = false;
+  private isInitialized = false;
   private requestId = 1;
   private pendingRequests = new Map<number, { resolve: Function; reject: Function }>();
   private serverName: string;
   private config: MCPServerConfig;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(serverName: string, config: MCPServerConfig) {
     this.serverName = serverName;
@@ -89,37 +91,23 @@ export class MCPClient {
         this.process = null;
       });
 
-      // Initialize the server
-      setTimeout(() => {
+      // Initialize the server with proper MCP handshake
+      setTimeout(async () => {
         if (this.process?.stdin) {
-          const initRequest = {
-            jsonrpc: '2.0',
-            id: this.requestId++,
-            method: 'initialize',
-            params: {
-              protocolVersion: '2024-11-05',
-              capabilities: {
-                tools: {}
-              },
-              clientInfo: {
-                name: 'chatbot-ui',
-                version: '1.0.0'
-              }
+          try {
+            await this.performMCPHandshake();
+            if (!initialized) {
+              console.log(`MCP Server ${this.serverName} initialized successfully`);
+              initialized = true;
+              // isConnected is already set in performMCPHandshake
+              resolve();
             }
-          };
-          console.log(`Sending initialization request to ${this.serverName}:`, initRequest);
-          this.process.stdin.write(JSON.stringify(initRequest) + '\n');
-          
-          // For stdio transport, assume initialization is successful after sending request
-          if (this.serverName === 'excel-mcp') {
-            setTimeout(() => {
-              if (!initialized) {
-                console.log(`MCP Server ${this.serverName} initialized (stdio transport)`);
-                initialized = true;
-                this.isConnected = true;
-                resolve();
-              }
-            }, 1000);
+          } catch (error) {
+            console.error(`MCP handshake failed for ${this.serverName}:`, error);
+            if (!initialized) {
+              initialized = true; // Prevent duplicate rejections
+              reject(error);
+            }
           }
         }
       }, 1000);
@@ -133,6 +121,81 @@ export class MCPClient {
           reject(new Error(`MCP server ${this.serverName} failed to initialize within timeout`));
         }
       }, 30000); // Increased timeout to 30 seconds
+    });
+  }
+
+  private async performMCPHandshake(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Use proper MCP handshake for all servers including Excel
+      console.log(`Performing MCP handshake for ${this.serverName}`);
+
+      // MCP handshake for all servers
+      const initRequest = {
+        jsonrpc: '2.0',
+        id: this.requestId++,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {
+            tools: {}
+          },
+          clientInfo: {
+            name: 'chatbot-ui',
+            version: '1.0.0'
+          }
+        }
+      };
+
+      // Store the initialization request ID to wait for response
+      const initId = initRequest.id;
+      let handshakeTimeout: NodeJS.Timeout;
+
+      const handleInitResponse = (message: any) => {
+        if (message.id === initId) {
+          if (message.result) {
+            console.log(`MCP handshake successful for ${this.serverName}:`, message.result);
+            
+            // Excel MCP server doesn't support notifications/initialized, skip it
+            if (this.serverName !== 'excel-mcp') {
+              // Send initialized notification for other servers
+              const initializedNotification = {
+                jsonrpc: '2.0',
+                method: 'notifications/initialized',
+                params: {}
+              };
+              
+              this.process?.stdin?.write(JSON.stringify(initializedNotification) + '\n');
+            }
+            
+            clearTimeout(handshakeTimeout);
+            this.isInitialized = true;
+            this.isConnected = true;  // Set both flags
+            resolve();
+          } else {
+            console.error(`MCP initialization failed for ${this.serverName}:`, message.error);
+            clearTimeout(handshakeTimeout);
+            reject(new Error(`MCP initialization failed: ${message.error?.message || 'Unknown error'}`));
+          }
+        }
+      };
+
+      // Temporarily hook into message handling to catch initialization response
+      const originalHandleMessage = this.handleMessage.bind(this);
+      this.handleMessage = (message: any) => {
+        handleInitResponse(message);
+        return originalHandleMessage(message);
+      };
+
+      // Set timeout for handshake
+      handshakeTimeout = setTimeout(() => {
+        console.error(`MCP handshake timeout for ${this.serverName}`);
+        this.handleMessage = originalHandleMessage;
+        reject(new Error(`MCP handshake timeout for ${this.serverName}`));
+      }, 10000);
+
+      // Send initialization request
+      console.log(`Sending MCP initialization request to ${this.serverName}:`, initRequest);
+      this.process?.stdin?.write(JSON.stringify(initRequest) + '\n');
     });
   }
 
@@ -217,10 +280,28 @@ export class MCPClient {
     this.process?.kill();
     this.process = null;
     this.isConnected = false;
+    this.isInitialized = false;
+    this.initializationPromise = null;
     this.pendingRequests.clear();
   }
 
   async listTools(): Promise<any[]> {
+    // Wait for initialization to complete before listing tools
+    if (!this.isInitialized) {
+      console.log(`Waiting for ${this.serverName} to initialize before listing tools...`);
+      // Wait up to 10 seconds for initialization
+      const maxWait = 10000;
+      const startTime = Date.now();
+      while (!this.isInitialized && (Date.now() - startTime) < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      if (!this.isInitialized) {
+        console.error(`${this.serverName} not initialized after waiting, cannot list tools`);
+        return [];
+      }
+    }
+
     console.log(`Requesting tools from ${this.serverName}...`);
     try {
       // Try without parameters first

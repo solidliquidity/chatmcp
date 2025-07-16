@@ -86,9 +86,9 @@ const CLAUDE_3_OPUS: LLM = {
 }
 
 // Claude 3.5 Sonnet (UPDATED 06/20/24)
-const CLAUDE_3_5_SONNET: LLM = {
+const CLAUDE_3_5_SONNET_OLD: LLM = {
   modelId: "claude-3-5-sonnet-20240620",
-  modelName: "Claude 3.5 Sonnet",
+  modelName: "Claude 3.5 Sonnet (June)",
   provider: "anthropic",
   hostedId: "claude-3-5-sonnet-20240620",
   platformLink: ANTHROPIC_PLATFORM_LINK,
@@ -101,11 +101,45 @@ const CLAUDE_3_5_SONNET: LLM = {
   }
 }
 
+// Claude 3.5 Sonnet (UPDATED 10/22/24) - Latest with tool use
+const CLAUDE_3_5_SONNET: LLM = {
+  modelId: "claude-3-5-sonnet-20241022",
+  modelName: "Claude 3.5 Sonnet",
+  provider: "anthropic",
+  hostedId: "claude-3-5-sonnet-20241022",
+  platformLink: ANTHROPIC_PLATFORM_LINK,
+  imageInput: true,
+  pricing: {
+    currency: "USD",
+    unit: "1M tokens",
+    inputCost: 3,
+    outputCost: 15
+  }
+}
+
+// Claude 3.5 Haiku (UPDATED 11/01/24) - Fast and supports tools
+const CLAUDE_3_5_HAIKU: LLM = {
+  modelId: "claude-3-5-haiku-20241022",
+  modelName: "Claude 3.5 Haiku",
+  provider: "anthropic",
+  hostedId: "claude-3-5-haiku-20241022",
+  platformLink: ANTHROPIC_PLATFORM_LINK,
+  imageInput: true,
+  pricing: {
+    currency: "USD",
+    unit: "1M tokens",
+    inputCost: 1,
+    outputCost: 5
+  }
+}
+
 export const ANTHROPIC_LLM_LIST: LLM[] = [
-  CLAUDE_2,
-  CLAUDE_INSTANT,
-  CLAUDE_3_HAIKU,
-  CLAUDE_3_SONNET,
-  CLAUDE_3_OPUS,
-  CLAUDE_3_5_SONNET
+  CLAUDE_3_5_SONNET,    // Latest - best for tool use
+  CLAUDE_3_5_HAIKU,     // Fast and supports tools
+  CLAUDE_3_OPUS,        // Most capable
+  CLAUDE_3_SONNET,      // Balanced
+  CLAUDE_3_HAIKU,       // Fast
+  CLAUDE_3_5_SONNET_OLD, // Older version
+  CLAUDE_2,             // Legacy
+  CLAUDE_INSTANT        // Legacy
 ]

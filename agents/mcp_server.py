@@ -39,6 +39,7 @@ class ColumbiaLakeMCPServer:
         self.tools = self._register_tools()
         
         self.logger.info("Columbia Lake MCP Server initialized")
+        self.logger.info(f"Registered {len(self.tools)} tools for external access")
     
     def _configure_mcp_tools(self):
         """Configure MCP tools for agents that need them"""
@@ -377,6 +378,27 @@ class ColumbiaLakeMCPServer:
                 },
                 "agent": "data_extraction",
                 "method": "search_excel_files"
+            },
+            "research_company_online": {
+                "name": "research_company_online",
+                "description": "Research a company online using web scraping and search tools",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "company_name": {
+                            "type": "string",
+                            "description": "Name of the company to research"
+                        },
+                        "company_website": {
+                            "type": "string",
+                            "description": "Optional company website URL to scrape directly",
+                            "default": None
+                        }
+                    },
+                    "required": ["company_name"]
+                },
+                "agent": "data_extraction",
+                "method": "research_company_online"
             },
             "run_follow_up_process": {
                 "name": "run_follow_up_process",

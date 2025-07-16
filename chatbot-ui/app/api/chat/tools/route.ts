@@ -31,6 +31,11 @@ export async function POST(request: Request) {
 
     // Add MCP tools
     const mcpTools = await getMCPTools()
+    console.log('🔧 MCP Tools Debug:', {
+      mcpToolsCount: mcpTools.length,
+      mcpToolNames: mcpTools.map(t => t.function?.name || t.name).slice(0, 10),
+      excelToolsCount: mcpTools.filter(t => (t.function?.name || t.name).includes('excel')).length
+    })
     allTools = allTools.concat(mcpTools as any)
 
     for (const selectedTool of selectedTools) {
@@ -66,12 +71,24 @@ export async function POST(request: Request) {
 
     // Generate system prompt for MCP tools
     const systemPrompt = generateSystemPrompt(mcpTools);
+    console.log('📝 System Prompt Debug:', {
+      systemPromptLength: systemPrompt.length,
+      hasExcelInPrompt: systemPrompt.includes('excel'),
+      totalTools: allTools.length
+    })
     
     // Add system message if we have tools
     const messagesWithSystem = systemPrompt ? [
       { role: 'system', content: systemPrompt },
       ...messages
     ] : messages;
+    
+    console.log('🚀 OpenAI API Request Debug:', {
+      model: chatSettings.model,
+      hasSystemPrompt: messagesWithSystem[0]?.role === 'system',
+      toolsCount: allTools.length,
+      toolsIncluded: allTools.length > 0 ? 'YES' : 'NO'
+    })
     
     const firstResponse = await openai.chat.completions.create({
       model: chatSettings.model as ChatCompletionCreateParamsBase["model"],
